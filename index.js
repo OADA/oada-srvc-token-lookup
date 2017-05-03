@@ -127,7 +127,7 @@ consumer.on('message', function(msg) {
 			"connection_id": connection_id,
 			"doc": {
 				"user_id": t.user._id,
-				"scope": t.scopes,
+				"scope": t.scope,
 			}
 		};
 
