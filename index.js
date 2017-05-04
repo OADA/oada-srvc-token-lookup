@@ -15,134 +15,107 @@
 
 'use strict';
 
+const debug = require('debug')('token-lookup');
 const kf = require('kafka-node');
 const Database = require('arangojs').Database;
+const Promise = require('bluebird');
 
-var Promise = require('bluebird');
-var moment = require('moment');
-var _ = require('lodash');
-var bcrypt = require('bcryptjs');
-
-var config = require('../../auth/oada-ref-auth-js/config');
-var client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_lookup"));
-var offset = Promise.promisifyAll(new kf.Offset(client));
-var consumer = Promise.promisifyAll(new kf.ConsumerGroup({
+//---------------------------------------------------------
+// Kafka intializations:
+const client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_lookup"));
+const offset = Promise.promisifyAll(new kf.Offset(client));
+const groupid = 'token_lookups';
+const topic = 'token_request';
+const consumer = Promise.promisifyAll(new kf.ConsumerGroup({
   host: 'zookeeper:2181', 
-  groupId: 'token_lookups',
+  groupId: groupid,
   fromOffset: 'latest'
-}, [ 'token_request' ]));
-var producer = Promise.promisifyAll(new kf.Producer(client, {
-	partitionerType: 0
+}, [ topic ]));
+let producer = Promise.promisifyAll(new kf.Producer(client, {
+  partitionerType: 0
 }));
 
-var tokendocs = require('./tokens.json');
-var userdocs = require('./users.json');
-var clientdocs = require('./clients.json');
-var codedocs = require('./codes.json');
+const libs = {
+   tokens: Promise.promisifyAll(require('oada-ref-auth/db/arango/tokens')),
+    users: Promise.promisifyAll(require('oada-ref-auth/db/arango/users')),
+};
 
-var db;
-var dbname;
-var cols;
-var colnames;
-var frankid = null;
 
-var jsonMsg;
-var httpRespMsg;
-var partition;
-var connection_id;
-var token;
-
-// library under test:
-var libs = {}; // pull this later after config sets the dbname it creates
-
+//--------------------------------------------------
+// Create topic if it doesn't exist:
 producer = producer.onAsync('ready')
-	.return(producer)
-	.tap(function(prod) {
-		return prod.createTopicsAsync(['http_request'], true);
-	});
+.then(() => prod.createTopicsAsync(['http_request'], true)
+.then(() => debug('Producer topic http_request created');
 
-db = new Database(config.get('arango:connectionString'));
-dbname = 'oada-ref-auth_arangotest-'+moment().format('YYYY-MM-DD-HH-mm-ss');
-config.set('arango:database', dbname);
-cols = config.get('arango:collections');
-colnames = _.values(cols);
 
-db.createDatabase(dbname).then(() => {
-	db.useDatabase(dbname);
-	// Create collections for users, clients, tokens, etc.
-	return Promise.map(colnames, c => db.collection(c).create());
-}).then(() => { 
-	// Create the indexes on each collection:
-	return Promise.all([
-		db.collection(cols.users).createHashIndex('username', { unique: true, sparse: true }),
-		db.collection(cols.clients).createHashIndex('clientId', { unique: true, sparse: true }),
-		db.collection(cols.tokens).createHashIndex('token', { unique: true, sparse: true }),
-		db.collection(cols.codes).createHashIndex('code', { unique: true, sparse: true }),
-	]);
-}).then(() => {
-	// hash the password:
-	const hashed = _.map(userdocs, u => {
-		const r = _.cloneDeep(u);
-		r.password = bcrypt.hashSync(r.password, config.get('server:passwordSalt'));
-		return r;
-	});
-	// Save the demo documents in each collection:
-	return Promise.props({
-		 users: Promise.all(_.map(hashed, u => db.collection(cols.users).save(u))),
-		 clients: Promise.all(_.map(clientdocs, c => db.collection(cols.clients).save(c))),
-		 tokens: Promise.all(_.map(tokendocs, t => db.collection(cols.tokens).save(t))),
-		 codes: Promise.all(_.map(codedocs, c => db.collection(cols.codes)  .save(c))),
-	});
-}).then(() => {
-	// get Frank's id for test later:
-	return db.collection('users').firstExample({username: 'frank'}).then(f => frankid = f._key);
-	// Done!
-}).then(() => {
-	libs = {
-		 tokens: require('../../auth/oada-ref-auth-js/db/arango/tokens'),
-		 users: require('../../auth/oada-ref-auth-js/db/arango/users'),
-		 clients: require('../../auth/oada-ref-auth-js/db/arango/clients'),
-		 codes: require('../../auth/oada-ref-auth-js/db/arango/codes'),
-	};
+//--------------------------------------------------
+// Consume message for a token lookup:
+consumer.on('message', msg => Promise.try(() => {
+  const req = JSON.parse(msg.value);
+  console.log("parsed json message is: ", jsonMsg);
 
-}).catch(err => {
-	console.log('FAILED to initialize arango tests by creating database '+dbname);
-	console.log('The error = ', err);
-});
+  if (typeof req.partition     === 'undefined') debug('WARNING: request '+req+' does not have partition');
+  if (typeof req.connection_id === 'undefined') debug('WARNING: request '+req+' does not have connection_id');
+  if (typeof req.token         === 'undefined') debug('WARNING: request '+req+' does not have token');
 
-consumer.on('message', function(msg) {
-	jsonMsg = JSON.parse(msg.value);
-	console.log("parsed json message is: ", jsonMsg);
+  const res = {
+    type: 'token_response',
+    token: req.token,
+    token_exists: false,
+    partition: req.partition,
+    connection_id: req.connection_id,
+    doc: { 
+      userid: null,
+      scope: [],
+      bookmarksid: null,
+      clientid: null,
+    }
+  };
 
-	//TODO: valid jsonMsg
-	partition = jsonMsg.resp_partition;
-	connection_id = jsonMsg.connection_id;
-	token = jsonMsg.token; 
+  // Get token from db.  Later on, we should speed this up 
+  // by getting everything in one query.
+  return libs.tokens.findByTokenAsync(token)
+  .then(t => {
+    if (t) { res.token_exists = true; }
+    else { debug('WARNING: token '+token+' does not exist.'); }
 
-	//TODO: implement when token is not found
-	libs.tokens.findByToken(token, (err, t) => {
-		httpRespMsg = {
-			"token": token,
-			"partition": partition,
-			"connection_id": connection_id,
-			"doc": {
-				"user_id": t.user._id,
-				"scope": t.scope,
-			}
-		};
+    // Save the client in case we have a rate limiter service someday
+    res.doc.clientId = t.clientId;
 
-		//TODO: implement when id is not found
-		libs.users.findById(t.user._id, (err, u) => {
-			httpRespMsg.doc.bookmark_id = u.bookmarks._id;
-			producer.then(prod => {
-				console.log("i will produce: ", httpRespMsg);
-				return prod.sendAsync([{
-					topic: 'http_response', messages: JSON.stringify(httpRespMsg)
-				}]);
-			});
-		});
-	});
+    // If there is no user, we can't lookup bookmarks
+    if (!t.user || typeof t.user._id === 'undefined') {
+      debug('WARNING: user for token '+token+' does not exist.');
+      return res;
+    }
+    res.doc.userid = t.user._id;
 
-	//offset.commit(msg);
+    // If we have a user, lookup bookmarks:
+    return libs.users.findByIdAsync(t.user._id);
+    .then(u => {
+      if (u && u.bookmarks && typeof u.bookmarks._id !== 'undefined') {
+        res.doc.bookmarksid = u.bookmarks._id;
+      } else {
+        debug('WARNING: user '+res.doc.userid+' not found!');
+      }
+    });
+  }).then(() => {
+
+    // response is built now, post up to http_response
+    return producer.then(prod => {
+      debug('Producing message: ', res);
+      return prod.sendAsync([
+        { topic: 'http_response', messages: JSON.stringify(httpRespMsg) }
+      ]);
+    });
+
+  }).catch(err => {
+    debug('ERROR: failed to fetch token info for token '+token+'.  Error is: ', err);
+
+  // Regardless of if something went wrong, we want to commit the message to prevent
+  // errors from resulting in infinite re-processing of messages
+  }).finally(() => 
+    offset.commitAsync(groupid, [ { topic: topic, partition: msg.partition, offset: msg.offset } ]);
+  );
+  
 });
 
