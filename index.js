@@ -19,6 +19,7 @@ const debug = require('debug')('token-lookup');
 const kf = require('kafka-node');
 const Database = require('arangojs').Database;
 const Promise = require('bluebird');
+const config = require('./config');
 
 //---------------------------------------------------------
 // Kafka intializations:
@@ -35,34 +36,40 @@ let producer = Promise.promisifyAll(new kf.Producer(client, {
   partitionerType: 0
 }));
 
-const libs = {
-   tokens: Promise.promisifyAll(require('oada-ref-auth/db/arango/tokens')),
-    users: Promise.promisifyAll(require('oada-ref-auth/db/arango/users')),
+let libs = {};
+
+const db = require('arangojs')('http://arangodb:8529');
+db.useDatabase('oada-srvc-token-lookup-test');
+config.set('arango:database', 'oada-srvc-token-lookup-test');
+
+libs = {
+	tokens: Promise.promisifyAll(require('../../auth/oada-ref-auth-js/db/arango/tokens')),
+	users: Promise.promisifyAll(require('../../auth/oada-ref-auth-js/db/arango/users')),
 };
-
-
+ 
 //--------------------------------------------------
 // Create topic if it doesn't exist:
 producer = producer.onAsync('ready')
-.then(() => prod.createTopicsAsync(['http_request'], true)
-.then(() => debug('Producer topic http_request created');
-
+	.return(producer)
+	.tap(function(prod) {
+		return prod.createTopicsAsync(['http_response'], true);
+	});
 
 //--------------------------------------------------
 // Consume message for a token lookup:
 consumer.on('message', msg => Promise.try(() => {
   const req = JSON.parse(msg.value);
-  console.log("parsed json message is: ", jsonMsg);
+  console.log("parsed json message is: ", req);
 
-  if (typeof req.partition     === 'undefined') debug('WARNING: request '+req+' does not have partition');
+  if (typeof req.resp_partition     === 'undefined') debug('WARNING: request '+req+' does not have partition');
   if (typeof req.connection_id === 'undefined') debug('WARNING: request '+req+' does not have connection_id');
   if (typeof req.token         === 'undefined') debug('WARNING: request '+req+' does not have token');
 
   const res = {
-    type: 'token_response',
+    type: 'http_response',
     token: req.token,
     token_exists: false,
-    partition: req.partition,
+    partition: req.resp_partition,
     connection_id: req.connection_id,
     doc: { 
       userid: null,
@@ -72,25 +79,27 @@ consumer.on('message', msg => Promise.try(() => {
     }
   };
 
+	console.log(res.token);
+
   // Get token from db.  Later on, we should speed this up 
   // by getting everything in one query.
-  return libs.tokens.findByTokenAsync(token)
+  return libs.tokens.findByTokenAsync(req.token)
   .then(t => {
     if (t) { res.token_exists = true; }
-    else { debug('WARNING: token '+token+' does not exist.'); }
+    else { debug('WARNING: token '+req.token+' does not exist.'); }
 
     // Save the client in case we have a rate limiter service someday
-    res.doc.clientId = t.clientId;
+    res.doc.clientid = t.clientId;
 
     // If there is no user, we can't lookup bookmarks
     if (!t.user || typeof t.user._id === 'undefined') {
-      debug('WARNING: user for token '+token+' does not exist.');
+      debug('WARNING: user for token '+req.token+' does not exist.');
       return res;
-    }
+		}
     res.doc.userid = t.user._id;
 
     // If we have a user, lookup bookmarks:
-    return libs.users.findByIdAsync(t.user._id);
+    return libs.users.findByIdAsync(t.user._id)
     .then(u => {
       if (u && u.bookmarks && typeof u.bookmarks._id !== 'undefined') {
         res.doc.bookmarksid = u.bookmarks._id;
@@ -104,18 +113,17 @@ consumer.on('message', msg => Promise.try(() => {
     return producer.then(prod => {
       debug('Producing message: ', res);
       return prod.sendAsync([
-        { topic: 'http_response', messages: JSON.stringify(httpRespMsg) }
+        { topic: 'http_response', messages: JSON.stringify(res) }
       ]);
     });
 
   }).catch(err => {
-    debug('ERROR: failed to fetch token info for token '+token+'.  Error is: ', err);
+    debug('ERROR: failed to fetch token info for token '+req.token+'.  Error is: ', err);
 
   // Regardless of if something went wrong, we want to commit the message to prevent
   // errors from resulting in infinite re-processing of messages
   }).finally(() => 
-    offset.commitAsync(groupid, [ { topic: topic, partition: msg.partition, offset: msg.offset } ]);
+    offset.commitAsync(groupid, [ { topic: topic, partition: msg.partition, offset: msg.offset } ])
   );
-  
-});
+}));
 
