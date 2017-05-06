@@ -28,17 +28,16 @@ const client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_looku
 const offset = Promise.promisifyAll(new kf.Offset(client));
 const groupid = 'token_lookups';
 const prodTopic = config.get('kafka:producerTopic');
-console.log(config.get());
 const consTopic = config.get('kafka:consumerTopic');
 const consumer = Promise.promisifyAll(new kf.ConsumerGroup({
-  host: 'zookeeper:2181', 
+  host: 'zookeeper:2181',
   groupId: groupid,
   fromOffset: 'latest'
 }, [ consTopic ]));
 let producer = Promise.promisifyAll(new kf.Producer(client, {
   partitionerType: 0
 }));
- 
+
 //--------------------------------------------------
 // Create topic if it doesn't exist:
 producer = producer.onAsync('ready')
@@ -62,7 +61,7 @@ consumer.on('message', msg => Promise.try(() => {
     token_exists: false,
     partition: req.resp_partition,
     connection_id: req.connection_id,
-    doc: { 
+    doc: {
       userid: null,
       scope: [],
       bookmarksid: null,
@@ -70,7 +69,7 @@ consumer.on('message', msg => Promise.try(() => {
     }
   };
 
-  // Get token from db.  Later on, we should speed this up 
+  // Get token from db.  Later on, we should speed this up
   // by getting everything in one query.
   return oadaLib.tokens.findByToken(req.token)
   .then(t => {
@@ -112,7 +111,7 @@ consumer.on('message', msg => Promise.try(() => {
 
 	// Regardless of if something went wrong, we want to commit the message to
 	// prevent Verrors from resulting in infinite re-processing of messages
-  }).finally(() => 
+  }).finally(() =>
 		offset.commitAsync(groupid,
 			[ { topic: consTopic , partition: msg.partition, offset: msg.offset } ])
   );
