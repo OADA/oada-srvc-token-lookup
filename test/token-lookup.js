@@ -145,12 +145,12 @@ describe('token lookup service', () => {
 				]).then(() => {
 					// token_lookup service should have produced an http_response message
 					// at this point
-					consumer.on('message', msg => Promise.try(() => {
+					consumer.on('message', msg => {
 						const httpMsg = JSON.parse(msg.value);
 						expect(httpMsg.connection_id).to.equal(random_connection_id);
 						expect(httpMsg.token).to.equal(random_token);
 						done();
-					}));
+					});
 				});
 			}).catch(done);
 		});
