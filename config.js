@@ -22,20 +22,20 @@ nconf.use('memory');
 // Order of precedence: argv, env, config file, defaults
 
 nconf.argv();
-nconf.env();
+nconf.env('__');
 
-// Load an external (optional) config file                                      
-var config = nconf.get('config');                                               
-if (config) {                                                                   
-  if (!fs.existsSync(config)) {                                                 
-    throw new Error('Could not find config file: ' + config);                   
-  }                                                                             
-  if (config.match(/\.json$/)) {                                                
-    nconf.file(config);                                                         
-  } else {                                                                      
-    // .JS file instead, so require it rather than nconf.file it:               
-    nconf.use('literal', require(config));                                      
-  }                                                                             
+// Load an external (optional) config file
+var config = nconf.get('config');
+if (config) {
+  if (!fs.existsSync(config)) {
+    throw new Error('Could not find config file: ' + config);
+  }
+  if (config.match(/\.json$/)) {
+    nconf.file(config);
+  } else {
+    // .JS file instead, so require it rather than nconf.file it:
+    conf.use('literal', require(config));
+  }
 }
 
 nconf.defaults(require('./config.defaults.js'));

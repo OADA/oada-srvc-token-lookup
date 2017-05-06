@@ -15,8 +15,6 @@
 
 'use strict';
 
-const Database  = require('arangojs').Database;
-const moment = require('moment');
 const _ = require('lodash');
 const expect = require('chai').expect;
 const Promise = require('bluebird');
@@ -32,14 +30,14 @@ const tokendocs = require('./tokens.json');
 const codedocs = require('./codes.json');
 
 // To test the token lookup, have to make a test database and populate it
-// with token and user 
+// with token and user
 let db = oadaLib.arango;
 let cols = config.get('arango:collections');
 let frankid = null;
 let random_connection_id;
 let random_token;
 
-// kafka topics 
+// kafka topics
 let consTopic;
 let prodTopic;
 let client;
@@ -51,17 +49,17 @@ let groupid;
 describe('token lookup service', () => {
   before(() => {
     // Create the test database:
-		
+
 		random_connection_id = randomstring.generate();
 		random_token = randomstring.generate();
 
 		// get the kafka stuff for testing:
 		consTopic = config.get('kafka:testConsumerTopic');
 		prodTopic = config.get('kafka:testProducerTopic');
-		
+
 		client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_lookup"));
 		offset = Promise.promisifyAll(new kf.Offset(client));
-		
+
 		let consOptions = { autoCommit: true };
 		consumer = Promise.promisifyAll(new kf.Consumer(client, [ {topic: consTopic} ], consOptions));
 
@@ -114,23 +112,21 @@ describe('token lookup service', () => {
   //--------------------------------------------------
 
   describe('.tokens', () => {
-    it('should be able to find the initial test token', done => {
-      oadaLib.tokens.findByToken('xyz', (err,t) => {
-        expect(err).to.be.a('null');
-        expect(t.token).to.equal('xyz');
-        done();
-      });
+    it('should be able to find the initial test token', () => {
+      return oadaLib.tokens.findByToken('xyz')
+        .then((t) => {
+          expect(t.token).to.equal('xyz');
+        });
     });
 
-    it('should be able to successfully save a new token', done => {
+    it('should be able to successfully save a new token', () => {
       const newtoken = _.cloneDeep(tokendocs[0]);
       newtoken.token = random_token;
       newtoken.user = { _id: frankid};
-      oadaLib.tokens.save(newtoken, (err,t) => {
-        expect(err).to.be.a('null');
-        expect(t.token).to.equal(newtoken.token);
-        done();
-      });
+      oadaLib.tokens.save(newtoken)
+        .then((t) => {
+          expect(t.token).to.equal(newtoken.token);
+        });
     });
   });
 
