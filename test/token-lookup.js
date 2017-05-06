@@ -16,28 +16,28 @@
 'use strict';
 
 const Database  = require('arangojs').Database;
-const config = require('../config');
 const moment = require('moment');
 const _ = require('lodash');
 const expect = require('chai').expect;
 const Promise = require('bluebird');
 const bcrypt = require('bcryptjs');
+const randomstring = require("randomstring");
 const kf = require('kafka-node');
+const oadaLib = require('oada-lib-arangodb');
+const config = require('../config');
 
 const userdocs = require('./users.json');
 const clientdocs = require('./clients.json');
 const tokendocs = require('./tokens.json');
 const codedocs = require('./codes.json');
 
-let libs = {};
-
 // To test the token lookup, have to make a test database and populate it
 // with token and user 
-let db;
-let dbname;
-let cols;
-let colnames;
+let db = oadaLib.arango;
+let cols = config.get('arango:collections');
 let frankid = null;
+let random_connection_id;
+let random_token;
 
 // kafka topics 
 let consTopic;
@@ -51,15 +51,13 @@ let groupid;
 describe('token lookup service', () => {
   before(() => {
     // Create the test database:
-    db = new Database(config.get('arango:connectionString'));
-    dbname = 'oada-srvc-token-lookup-test';
-    config.set('arango:database',dbname);
-    cols = config.get('arango:collections');
-    colnames = _.values(cols);
+		
+		random_connection_id = randomstring.generate();
+		random_token = randomstring.generate();
 
 		// get the kafka stuff for testing:
-		consTopic = config.get('kafka:consumerTopic');
-		prodTopic = config.get('kafka:producerTopic');
+		consTopic = config.get('kafka:testConsumerTopic');
+		prodTopic = config.get('kafka:testProducerTopic');
 		
 		client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_lookup"));
 		offset = Promise.promisifyAll(new kf.Offset(client));
@@ -77,22 +75,17 @@ describe('token lookup service', () => {
 				return prod.createTopicsAsync(['token_request'], true);
 			});
 
-    return db.createDatabase(dbname)
-    .then(() => {
-      db.useDatabase(dbname);
+		return oadaLib.init.run()
+		.then(() => {
+			return Promise.props({
+				users: db.collection(cols.users).truncate(),
+				clients: db.collection(cols.clients).truncate(),
+				tokens: db.collection(cols.tokens).truncate(),
+				codes: db.collection(cols.codes).truncate(),
+			});
+		})
 
-      // Create collections for users, clients, tokens, etc.
-      return Promise.map(colnames, c => db.collection(c).create());
-    }).then(() => { 
-
-      // Create the indexes on each collection:
-      return Promise.all([
-        db.collection(cols.users)  .createHashIndex('username', { unique: true, sparse: true }),
-        db.collection(cols.clients).createHashIndex('clientId', { unique: true, sparse: true }),
-        db.collection(cols.tokens) .createHashIndex(   'token', { unique: true, sparse: true }),
-        db.collection(cols.codes)  .createHashIndex(    'code', { unique: true, sparse: true }),
-      ]);
-    }).then(() => {
+		.then(() => {
       // hash the password:
       const hashed = _.map(userdocs, u => {
         const r = _.cloneDeep(u);
@@ -110,15 +103,7 @@ describe('token lookup service', () => {
       // get Frank's id for test later:
       return db.collection('users').firstExample({username: 'frank'}).then(f => frankid = f._key);
     // Done!
-    }).then(() => {
-      libs = {
-				users: require('../../../auth/oada-ref-auth-js/db/arango/users'),
-        clients: require('../../../auth/oada-ref-auth-js/db/arango/clients'),
-				tokens: require('../../../auth/oada-ref-auth-js/db/arango/tokens'),
-				codes: require('../../../auth/oada-ref-auth-js/db/arango/codes'),
-      };
     }).catch(err => {
-      console.log('FAILED to initialize arango tests by creating database '+dbname);
       console.log('The error = ', err);
     });
   });
@@ -128,69 +113,9 @@ describe('token lookup service', () => {
   // The tests!
   //--------------------------------------------------
 
-  describe('.users', () => {
-    it('should be able to find frank by his id', done => {
-      libs.users.findById(frankid, (err,u) => {
-        expect(err).to.be.a('null');
-        expect(u.username).to.equal('frank');
-        done();
-      });
-    });
-    it('should be able to find frank with his password', done => {
-      libs.users.findByUsernamePassword('frank', 'test', (err,u) => {
-        expect(err).to.be.a('null');
-        expect(u.username).to.equal('frank');
-        done();
-      });
-    });
-  });
-
-  describe('.clients', () => {
-    it('should be able to find the initial test client', done => {
-      const clientId = '3klaxu838akahf38acucaix73@identity.oada-dev.com';
-      libs.clients.findById(clientId, (err,c) => {
-        expect(err).to.be.a('null');
-        expect(c.clientId).to.equal(clientId);
-        done();
-      });
-    });
-
-    it('should be able to successfully save a new client', done => {
-      const newclient = _.cloneDeep(clientdocs[0]);
-      newclient.clientId = '12345abcd';
-      libs.clients.save(newclient, (err,c) => {
-        expect(err).to.be.a('null');
-        expect(c.clientId).to.equal(newclient.clientId);
-        done();
-      });
-    });
-  });
-
-  describe('.codes', () => {
-    it('should be able to find the initial test code', done => {
-      libs.codes.findByCode('xyz', (err,c) => {
-        expect(err).to.be.a('null');
-        expect(c.code).to.equal('xyz');
-        done();
-      });
-    });
-
-    it('should be able to successfully save a new code', done => {
-      const newcode = _.cloneDeep(codedocs[0]);
-      newcode.code = '012345abcd';
-      newcode.user = { _id: frankid};
-      libs.codes.save(newcode, (err,c) => {
-        expect(err).to.be.a('null');
-        expect(c.code).to.equal(newcode.code);
-        done();
-      });
-    });
-  });
-
-
   describe('.tokens', () => {
     it('should be able to find the initial test token', done => {
-      libs.tokens.findByToken('xyz', (err,t) => {
+      oadaLib.tokens.findByToken('xyz', (err,t) => {
         expect(err).to.be.a('null');
         expect(t.token).to.equal('xyz');
         done();
@@ -199,9 +124,9 @@ describe('token lookup service', () => {
 
     it('should be able to successfully save a new token', done => {
       const newtoken = _.cloneDeep(tokendocs[0]);
-      newtoken.token = '012345abcd';
+      newtoken.token = random_token;
       newtoken.user = { _id: frankid};
-      libs.tokens.save(newtoken, (err,t) => {
+      oadaLib.tokens.save(newtoken, (err,t) => {
         expect(err).to.be.a('null');
         expect(t.token).to.equal(newtoken.token);
         done();
@@ -210,27 +135,28 @@ describe('token lookup service', () => {
   });
 
 	describe('.token-lookup', () => {
-		it('should be able to produce to token_request topic', () => {
+		it('should be able to perform a token-lookup', done => {
+			// make token_request message
 			var t = {};
 			t.resp_partition = 0;
-			t.connection_id = 1234567890;
-			t.token = "xyz";
+			t.connection_id = random_connection_id;
+			t.token = random_token;
 
-			return producer.then(prod => {
+			producer.then(prod => {
+				// produce token_request message
 				return prod.sendAsync([
 					{ topic: prodTopic, messages: JSON.stringify(t) }
-				]);
-			});
-		});
-
-		// token-lookup should already published a http_response message by now
-
-		it('should be able to consume from http_repsonse topic', done => {
-			consumer.on('message', msg => Promise.try(() => {
-				const httpMsg = JSON.parse(msg.value);
-				expect(httpMsg.connection_id).to.equal(1234567890);
-				done();
-			}));
+				]).then(() => {
+					// token_lookup service should have produced an http_response message
+					// at this point
+					consumer.on('message', msg => Promise.try(() => {
+						const httpMsg = JSON.parse(msg.value);
+						expect(httpMsg.connection_id).to.equal(random_connection_id);
+						expect(httpMsg.token).to.equal(random_token);
+						done();
+					}));
+				});
+			}).catch(done);
 		});
 	});
 
@@ -238,9 +164,6 @@ describe('token lookup service', () => {
   // After tests are done, get rid of our temp database
   //-------------------------------------------------------
   after(() => {
-    db.useDatabase('_system'); // arango only lets you drop a database from the _system db
-    return db.dropDatabase(dbname)
-    .then(() => { console.log('Successfully cleaned up test database '+dbname); })
-    .catch(err => console.log('Could not drop test database '+dbname+' after the tests! err = ', err));
+		return oadaLib.init.cleanup();
   });
 });

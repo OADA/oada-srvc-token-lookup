@@ -19,6 +19,7 @@ const debug = require('debug')('token-lookup');
 const kf = require('kafka-node');
 const Database = require('arangojs').Database;
 const Promise = require('bluebird');
+const oadaLib = require('oada-lib-arangodb');
 const config = require('./config');
 
 //---------------------------------------------------------
@@ -26,40 +27,30 @@ const config = require('./config');
 const client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_lookup"));
 const offset = Promise.promisifyAll(new kf.Offset(client));
 const groupid = 'token_lookups';
-const topic = 'token_request';
+const prodTopic = config.get('kafka:producerTopic');
+console.log(config.get());
+const consTopic = config.get('kafka:consumerTopic');
 const consumer = Promise.promisifyAll(new kf.ConsumerGroup({
   host: 'zookeeper:2181', 
   groupId: groupid,
   fromOffset: 'latest'
-}, [ topic ]));
+}, [ consTopic ]));
 let producer = Promise.promisifyAll(new kf.Producer(client, {
   partitionerType: 0
 }));
-
-let libs = {};
-
-const db = require('arangojs')('http://arangodb:8529');
-db.useDatabase('oada-srvc-token-lookup-test');
-config.set('arango:database', 'oada-srvc-token-lookup-test');
-
-libs = {
-	tokens: Promise.promisifyAll(require('../../auth/oada-ref-auth-js/db/arango/tokens')),
-	users: Promise.promisifyAll(require('../../auth/oada-ref-auth-js/db/arango/users')),
-};
  
 //--------------------------------------------------
 // Create topic if it doesn't exist:
 producer = producer.onAsync('ready')
 	.return(producer)
 	.tap(function(prod) {
-		return prod.createTopicsAsync(['http_response'], true);
+		return prod.createTopicsAsync([ prodTopic ], true);
 	});
 
 //--------------------------------------------------
 // Consume message for a token lookup:
 consumer.on('message', msg => Promise.try(() => {
   const req = JSON.parse(msg.value);
-  console.log("parsed json message is: ", req);
 
   if (typeof req.resp_partition     === 'undefined') debug('WARNING: request '+req+' does not have partition');
   if (typeof req.connection_id === 'undefined') debug('WARNING: request '+req+' does not have connection_id');
@@ -79,11 +70,9 @@ consumer.on('message', msg => Promise.try(() => {
     }
   };
 
-	console.log(res.token);
-
   // Get token from db.  Later on, we should speed this up 
   // by getting everything in one query.
-  return libs.tokens.findByTokenAsync(req.token)
+  return oadaLib.tokens.findByToken(req.token)
   .then(t => {
     if (t) { res.token_exists = true; }
     else { debug('WARNING: token '+req.token+' does not exist.'); }
@@ -99,7 +88,7 @@ consumer.on('message', msg => Promise.try(() => {
     res.doc.userid = t.user._id;
 
     // If we have a user, lookup bookmarks:
-    return libs.users.findByIdAsync(t.user._id)
+    return oadaLib.users.findById(t.user._id)
     .then(u => {
       if (u && u.bookmarks && typeof u.bookmarks._id !== 'undefined') {
         res.doc.bookmarksid = u.bookmarks._id;
@@ -113,17 +102,19 @@ consumer.on('message', msg => Promise.try(() => {
     return producer.then(prod => {
       debug('Producing message: ', res);
       return prod.sendAsync([
-        { topic: 'http_response', messages: JSON.stringify(res) }
+        { topic: prodTopic, messages: JSON.stringify(res) }
       ]);
     });
 
   }).catch(err => {
-    debug('ERROR: failed to fetch token info for token '+req.token+'.  Error is: ', err);
+		debug('ERROR: failed to fetch token info for token '
+			+req.token+'.  Error is: ', err);
 
-  // Regardless of if something went wrong, we want to commit the message to prevent
-  // errors from resulting in infinite re-processing of messages
+	// Regardless of if something went wrong, we want to commit the message to
+	// prevent Verrors from resulting in infinite re-processing of messages
   }).finally(() => 
-    offset.commitAsync(groupid, [ { topic: topic, partition: msg.partition, offset: msg.offset } ])
+		offset.commitAsync(groupid,
+			[ { topic: consTopic , partition: msg.partition, offset: msg.offset } ])
   );
 }));
 
