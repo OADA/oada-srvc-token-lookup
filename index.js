@@ -22,6 +22,8 @@ const Promise = require('bluebird');
 const oadaLib = require('oada-lib-arangodb');
 const config = require('./config');
 
+oadaLib.init.run();
+
 //---------------------------------------------------------
 // Kafka intializations:
 const client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_lookup"));
@@ -73,8 +75,12 @@ consumer.on('message', msg => Promise.try(() => {
   // by getting everything in one query.
   return oadaLib.tokens.findByToken(req.token)
   .then(t => {
-    if (t) { res.token_exists = true; }
-    else { debug('WARNING: token '+req.token+' does not exist.'); }
+    if(!t) {
+      debug('WARNING: token '+req.token+' does not exist.');
+      return;
+    }
+
+    res.token_exists = true;
 
     // Save the client in case we have a rate limiter service someday
     res.doc.clientid = t.clientId;
