@@ -1,54 +1,40 @@
+/* Copyright 2014 Open Ag Data Alliance
+ *
+ * Licensed under the Apache License, Version 2.0 (the 'License');
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an 'AS IS' BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 'use strict';
 
 var path = require('path');
 var fs = require('fs');
 
 module.exports = {
-	init: '../../auth/oada-ref-auth-js/db/arango/init',                                                     
-  server: {                                                                     
-    sessionSecret: "2jp901p3#2#(!)kd9",                                         
-    passwordSalt: "$2a$06$xbh/gQcEgAX5eapjlCgMYO",                              
-    port: 80,                                                                   
-    mode: "http",                                                               
-    domain: "localhost", // in docker it's port 80 localhost                    
-    publicUri: "https://localhost" // but to nginx proxy, it's https://localhost in dev
-  },                                                                            
-  wellknownPrefix: "/oadaauth",                                                 
-  // Prefix should match nginx proxy's prefix for the auth service              
-  //endpointsPrefix: "/oadaauth",                                               
-  keys: {                                                                       
-    signPems: path.join(__dirname,"sign/"),                                     
-  },                     
-  arango: {
-    connectionString: "http://arangodb:8529",
-    collections: {
-      users: "users",
-      clients: "clients",
-      tokens: "tokens",
-      codes: "codes",
-    },
-    defaultusers: [
-      {   username: "frank",           password: "test",
-              name: "Farmer Frank", family_name: "Frank",
-        given_name: "Farmer",       middle_name: "",
-          nickname: "Frankie",            email: "frank@openag.io",
-      },
-    ],
-  },
-  datastores: {
-		users: './test/users',
-		clients: './test/clients',
-		tokens: './test/tokens',
-		codes: './test/codes',
-  },
-  hint: {
-    username: 'frank',
-    password: 'pass'
-  },
+
+  // By default, this checks for NODE_ENV===production 
+  // to determine if is production.  
+  // set to true to use the production database name
+  // and prevent init.cleanup() from being called.
+  isProduction: (process.env.NODE_ENV === 'production'),
+
 	kafka: {
-		testConsumerTopic: "http_response",
-		testProducerTopic: "token_request",
-		consumerTopic: "token_request",
-		producerTopic: "http_response"
-	}
+    topics: {
+      tokenRequest: 'token_request',
+      graphRequest: 'graph_request',
+      writeRequest: 'write_request',
+      httpResponse: 'http_response',
+    },
+  },
+  zookeeper: {
+    host: 'zookeeper:2181',
+  },
+
 };
