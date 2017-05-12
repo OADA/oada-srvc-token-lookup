@@ -69,6 +69,8 @@ consumer.on('message', msg => Promise.try(() => {
     }
   };
 
+  // Strip off "Bearer" if necessary:
+  req.token = req.token.trim().replace(/^Bearer /,'');
   // Get token from db.  Later on, we should speed this up
   // by getting everything in one query.
   return oadaLib.tokens.findByToken(req.token)
