@@ -15,7 +15,10 @@
 
 'use strict';
 
-const debug = require('debug')('token-lookup');
+const debug = require('debug');
+const trace = debug('token-lookup:trace');
+const info = debug('token-lookup:info');
+const error = debug('token-lookup:error');
 const kf = require('kafka-node');
 const Database = require('arangojs').Database;
 const Promise = require('bluebird');
@@ -53,9 +56,9 @@ producer = producer.onAsync('ready')
 consumer.on('message', msg => Promise.try(() => {
   const req = JSON.parse(msg.value);
 
-  if (typeof req.resp_partition     === 'undefined') debug('WARNING: request '+req+' does not have partition');
-  if (typeof req.connection_id === 'undefined') debug('WARNING: request '+req+' does not have connection_id');
-  if (typeof req.token         === 'undefined') debug('WARNING: request '+req+' does not have token');
+  if (typeof req.resp_partition     === 'undefined') error('WARNING: request '+req+' does not have partition');
+  if (typeof req.connection_id === 'undefined') error('WARNING: request '+req+' does not have connection_id');
+  if (typeof req.token         === 'undefined') error('WARNING: request '+req+' does not have token');
 
   const res = {
     type: 'http_response',
@@ -76,7 +79,7 @@ consumer.on('message', msg => Promise.try(() => {
   return oadaLib.tokens.findByToken(req.token)
   .then(t => {
     if(!t) {
-      debug('WARNING: token '+req.token+' does not exist.');
+      info('WARNING: token '+req.token+' does not exist.');
       return;
     }
 
@@ -87,7 +90,7 @@ consumer.on('message', msg => Promise.try(() => {
 
     // If there is no user, we can't lookup bookmarks
     if (!t.user || typeof t.user._id === 'undefined') {
-      debug('WARNING: user for token '+req.token+' does not exist.');
+      info('WARNING: user for token '+req.token+' does not exist.');
       return res;
 		}
     res.doc.userid = t.user._id;
@@ -98,21 +101,21 @@ consumer.on('message', msg => Promise.try(() => {
       if (u && u.bookmarks && typeof u.bookmarks._id !== 'undefined') {
         res.doc.bookmarksid = u.bookmarks._id;
       } else {
-        debug('WARNING: user '+res.doc.userid+' not found!');
+        info('WARNING: user '+res.doc.userid+' not found!');
       }
     });
   }).then(() => {
 
     // response is built now, post up to http_response
     return producer.then(prod => {
-      debug('Producing message: ', res);
+      trace('Producing message: ', res);
       return prod.sendAsync([
         { topic: prodTopic, messages: JSON.stringify(res) }
       ]);
     });
 
   }).catch(err => {
-		debug('ERROR: failed to fetch token info for token '
+		error('ERROR: failed to fetch token info for token '
 			+req.token+'.  Error is: ', err);
 
 	// Regardless of if something went wrong, we want to commit the message to
