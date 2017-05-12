@@ -810,7 +810,7 @@ number-is-nan@^1.0.0:
 
 "oada-lib-arangodb@github:oada/oada-lib-arangodb":
   version "0.0.2"
-  resolved "https://codeload.github.com/oada/oada-lib-arangodb/tar.gz/e2a9188713909cd9131d9f2f724e5a4f68f3318f"
+  resolved "https://codeload.github.com/oada/oada-lib-arangodb/tar.gz/94581633e804b7c068913dbffd4749b3b325364a"
   dependencies:
     arangojs "^5.6.1"
     bcryptjs "^2.4.3"
@@ -823,6 +823,13 @@ number-is-nan@^1.0.0:
     md5 "^2.2.1"
     mocha "^3.3.0"
     moment "^2.18.1"
+    nconf "^0.8.4"
+    uuid "^3.0.1"
+
+"oada-lib-config@github:oada/oada-lib-config":
+  version "0.0.1"
+  resolved "https://codeload.github.com/oada/oada-lib-config/tar.gz/36b9a4011b5a7cf2e4e6a057040b4a6c3580cf93"
+  dependencies:
     nconf "^0.8.4"
     uuid "^3.0.1"
 

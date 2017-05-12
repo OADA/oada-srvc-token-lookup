@@ -24,136 +24,95 @@ const kf = require('kafka-node');
 const oadaLib = require('oada-lib-arangodb');
 const config = require('../config');
 
-const userdocs = require('./users.json');
-const clientdocs = require('./clients.json');
-const tokendocs = require('./tokens.json');
-const codedocs = require('./codes.json');
-
 // To test the token lookup, have to make a test database and populate it
 // with token and user
 let db = oadaLib.arango;
 let cols = config.get('arango:collections');
 let frankid = null;
-let random_connection_id;
-let random_token;
 
 // kafka topics
-let consTopic;
-let prodTopic;
+const	consTopic = config.get('kafka:topics:httpResponse');
+const prodTopic = config.get('kafka:topics:tokenRequest');
 let client;
-let offset;
 let consumer;
 let producer;
 let groupid;
 
 describe('token lookup service', () => {
-  before(() => {
-    // Create the test database:
+  before((done) => {
+		client = new kf.Client("zookeeper:2181", "token_lookup");
 
-		random_connection_id = randomstring.generate();
-		random_token = randomstring.generate();
-
-		// get the kafka stuff for testing:
-		consTopic = config.get('kafka:testConsumerTopic');
-		prodTopic = config.get('kafka:testProducerTopic');
-
-		client = Promise.promisifyAll(new kf.Client("zookeeper:2181", "token_lookup"));
-		offset = Promise.promisifyAll(new kf.Offset(client));
-
-		let consOptions = { autoCommit: true };
-		consumer = Promise.promisifyAll(new kf.Consumer(client, [ {topic: consTopic} ], consOptions));
-
-		producer = Promise.promisifyAll(new kf.Producer(client, {
+		producer = new kf.Producer(client, {
 			partitionerType: 0
-		}));
-
-		producer = producer.onAsync('ready')
-			.return(producer)
-			.tap(function(prod) {
-				return prod.createTopicsAsync(['token_request'], true);
-			});
-
-		return oadaLib.init.run()
-		.then(() => {
-			return Promise.props({
-				users: db.collection(cols.users).truncate(),
-				clients: db.collection(cols.clients).truncate(),
-				tokens: db.collection(cols.tokens).truncate(),
-				codes: db.collection(cols.codes).truncate(),
-			});
-		})
-
-		.then(() => {
-      // hash the password:
-      const hashed = _.map(userdocs, u => {
-        const r = _.cloneDeep(u);
-        r.password = bcrypt.hashSync(r.password, config.get('server:passwordSalt'));
-        return r;
-      });
-      // Save the demo documents in each collection:
-      return Promise.props({
-          users: Promise.all(_.map(    hashed, u => db.collection(cols.users)  .save(u))),
-        clients: Promise.all(_.map(clientdocs, c => db.collection(cols.clients).save(c))),
-         tokens: Promise.all(_.map( tokendocs, t => db.collection(cols.tokens) .save(t))),
-          codes: Promise.all(_.map(  codedocs, c => db.collection(cols.codes)  .save(c))),
-      });
-    }).then(() => {
-      // get Frank's id for test later:
-      return db.collection('users').firstExample({username: 'frank'}).then(f => frankid = f._key);
-    // Done!
-    }).catch(err => {
-      console.log('The error = ', err);
     });
+
+    consumer = new kf.Consumer(client, [ {topic: consTopic} ], {
+      autoCommit: true
+    });
+
+    producer.on('ready', done);
   });
 
+  before(() => oadaLib.init.run());
 
   //--------------------------------------------------
   // The tests!
   //--------------------------------------------------
-
-  describe('.tokens', () => {
-    it('should be able to find the initial test token', () => {
-      return oadaLib.tokens.findByToken('xyz')
-        .then((t) => {
-          expect(t.token).to.equal('xyz');
-        });
-    });
-
-    it('should be able to successfully save a new token', () => {
-      const newtoken = _.cloneDeep(tokendocs[0]);
-      newtoken.token = random_token;
-      newtoken.user = { _id: frankid};
-      oadaLib.tokens.save(newtoken)
-        .then((t) => {
-          expect(t.token).to.equal(newtoken.token);
-        });
-    });
-  });
-
 	describe('.token-lookup', () => {
-		it('should be able to perform a token-lookup', done => {
+		it('should be able to perform a token-lookup', (done) => {
 			// make token_request message
-			var t = {};
-			t.resp_partition = 0;
-			t.connection_id = random_connection_id;
-			t.token = random_token;
+			let t = {
+        resp_partition: 0,
+        connection_id: '123abc',
+        token: 'xyz'
+      };
 
-			producer.then(prod => {
-				// produce token_request message
-				return prod.sendAsync([
-					{ topic: prodTopic, messages: JSON.stringify(t) }
-				]).then(() => {
-					// token_lookup service should have produced an http_response message
-					// at this point
-					consumer.on('message', msg => {
-						const httpMsg = JSON.parse(msg.value);
-						expect(httpMsg.connection_id).to.equal(random_connection_id);
-						expect(httpMsg.token).to.equal(random_token);
-						done();
-					});
-				});
-			}).catch(done);
-		});
+      producer.send([{topic: prodTopic, messages: JSON.stringify(t)}], (a) => {
+        consumer.on('message', msg => {
+          const httpMsg = JSON.parse(msg.value);
+
+          expect(httpMsg.type).to.equal('http_response')
+          expect(httpMsg.token).to.equal('xyz');
+          expect(httpMsg.token_exists).is.ok;
+          expect(httpMsg.partition).to.equal(0);
+          expect(httpMsg.connection_id).to.equal('123abc')
+          expect(httpMsg.doc.userid).to.equal('default:users-frank-123');
+          expect(httpMsg.doc.scope).to.be.instanceof(Array);
+          expect(httpMsg.doc.scope).to.be.empty;
+          expect(httpMsg.doc.bookmarksid).to.equal('default:resources_bookmarks_123');
+          expect(httpMsg.doc.clientid).to.equal('jf93caauf3uzud7f308faesf3@provider.oada-dev.com');
+
+          done();
+        });
+      });
+    });
+
+		it('should error when token does not exist', (done) => {
+			let t = {
+        resp_partition: 0,
+        connection_id: 'abc123',
+        token: 'not-valid'
+      };
+
+      producer.send([{topic: prodTopic, messages: JSON.stringify(t)}], (a) => {
+        consumer.on('message', msg => {
+          const httpMsg = JSON.parse(msg.value);
+
+          expect(httpMsg.type).to.equal('http_response')
+          expect(httpMsg.token).to.equal('not-valid');
+          expect(httpMsg.token_exists).is.not.ok;
+          expect(httpMsg.partition).to.equal(0);
+          expect(httpMsg.connection_id).to.equal('abc123')
+          expect(httpMsg.doc.userid).to.equal(null);
+          expect(httpMsg.doc.scope).to.be.instanceof(Array);
+          expect(httpMsg.doc.scope).to.be.empty;
+          expect(httpMsg.doc.bookmarksid).to.equal(null);
+          expect(httpMsg.doc.clientid).to.equal(null);
+
+          done();
+        });
+      });
+    });
 	});
 
   //-------------------------------------------------------

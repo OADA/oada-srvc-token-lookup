@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "isTest=true mocha test/token-lookup.js",
+    "test": "mocha test/token-lookup.js",
     "start": "node index.js"
   },
   "author": "",
