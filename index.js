@@ -63,10 +63,10 @@ consumer.on('message', (msg) => {
         partition: req.resp_partition,
         connection_id: req.connection_id,
         doc: {
-          userid: null,
+          user_id: null,
           scope: [],
-          bookmarksid: null,
-          clientid: null,
+          bookmarks_id: null,
+          client_id: null,
         }
       };
 
@@ -90,9 +90,10 @@ consumer.on('message', (msg) => {
           }
 
           res.token_exists = true;
-          res.doc.clientid = t.clientId;
-          res.doc.userid = t.user._id || null;
-          res.doc.bookmarksid = t.user.bookmarks._id || null;
+          res.doc.client_id = t.clientId;
+          res.doc.user_id = t.user._id || res.doc.user_id;
+          res.doc.bookmarks_id = t.user.bookmarks._id || res.doc.bookmarks_id;
+          res.doc.scope = t.scope || res.doc.scope;
 
           return res;
       });
